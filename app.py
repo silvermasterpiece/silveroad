@@ -8,13 +8,20 @@ import time
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Yol Hasar Tespiti", page_icon="🛣️", layout="wide")
 
-st.title("🛣️ Yol Hasar Tespiti - AI Analizi")
-st.markdown("""
-Bu uygulama, yoldaki **Çatlak, Çukur ve Kasisleri** tespit eder.
-Video işleme performansını artırmak için **Akıllı Kare Atlama (Smart Frame Skipping)** teknolojisi kullanılır.
-""")
+# --- LOGO VE BAŞLIK ---
+# Logoyu hem sidebar'a hem de ana sayfaya koyabiliriz. 
+# En şık duranı Sidebar'ın en üstüdür.
+
+logo_path = "silveroad.png"
 
 # --- YAN MENÜ (AYARLAR) ---
+if os.path.exists(logo_path):
+    # use_container_width=True, logonun sidebar genişliğine tam oturmasını sağlar
+    st.sidebar.image(logo_path, use_container_width=True) 
+else:
+    # Logo dosyası yoksa kullanıcıyı uyar ama kodu bozma
+    st.sidebar.warning(f"Logo bulunamadı: {logo_path}. Lütfen dosyayı proje klasörüne ekleyin.")
+
 st.sidebar.header("⚙️ Ayarlar")
 
 # Model Yükleme (Cache kullanarak her defasında tekrar yüklenmesini engelliyoruz)
@@ -41,6 +48,13 @@ class_colors = {
     2: (255, 0, 0)     # Mavi
 }
 
+# --- ANA SAYFA İÇERİĞİ ---
+st.title("🛣️ Yol Hasar Tespiti - AI Analizi")
+st.markdown("""
+Bu uygulama, yoldaki **Çatlak, Çukur ve Kasisleri** tespit eder.
+Video işleme performansını artırmak için **Akıllı Kare Atlama (Smart Frame Skipping)** teknolojisi kullanılır.
+""")
+
 # --- VİDEO YÜKLEME ---
 uploaded_file = st.file_uploader("Analiz edilecek videoyu yükleyin", type=['mp4', 'avi', 'mov'])
 
@@ -53,8 +67,7 @@ def process_video(video_path, output_path):
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = int(cap.get(cv2.CAP_PROP_FPS))
     
-    # Video Kaydedici (MP4V codeci genelde uyumludur, ancak web'de izlemek için h264 gerekebilir. 
-    # Şimdilik indirme amaçlı standart mp4v kullanıyoruz)
+    # Video Kaydedici (MP4V codeci genelde uyumludur)
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
 
@@ -104,9 +117,9 @@ def process_video(video_path, output_path):
         # 1. Kayıt (BGR formatında)
         out.write(frame)
         
-        # 2. Ekranda Gösterme (Streamlit RGB ister, OpenCV BGR verir -> Dönüştürmeliyiz)
+        # 2. Ekranda Gösterme (Streamlit RGB ister)
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        st_frame.image(frame_rgb, channels="RGB", use_column_width=True)
+        st_frame.image(frame_rgb, channels="RGB", use_container_width=True)
 
         # İlerleme çubuğunu güncelle
         if total_frames > 0:
@@ -121,7 +134,7 @@ def process_video(video_path, output_path):
 
 # --- ANA AKIŞ ---
 if uploaded_file is not None:
-    # Geçici dosya oluştur (Streamlit dosyayı RAM'de tutar, OpenCV dosya yolu ister)
+    # Geçici dosya oluştur
     tfile = tempfile.NamedTemporaryFile(delete=False) 
     tfile.write(uploaded_file.read())
     
