@@ -2,16 +2,15 @@ import streamlit as st
 from ultralytics import YOLO
 import cv2
 import tempfile
-import os
+import gc  # Garbage Collector (Bellek temizliği için şart)
 
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="SilverRoad Bozuk Yol Tespiti", layout="centered")
 
-# --- CSS İLE GÖRÜNTÜ VE BUTON DÜZENLEMELERİ ---
+# --- CSS ---
 st.markdown(
     """
     <style>
-    /* Görüntü ayarları */
     div[data-testid="stMainBlock"] img {
         max-height: 70vh !important;
         object-fit: contain !important;
@@ -22,7 +21,6 @@ st.markdown(
         justify-content: center !important;
         width: 100% !important;
     }
-    /* Butonları biraz daha belirgin yapalım */
     div.stButton > button {
         width: 100%;
     }
@@ -62,20 +60,26 @@ skip_frames = st.sidebar.slider("Hız (Skip Frame)", 1, 30, 5)
 st.title("🛣️ SilverRoad Bozuk Yol Tespiti")
 st.caption(f"Aktif Model: **{secilen_model_ismi}**")
 
-# --- MODEL YÜKLEME ---
+# --- MODEL YÜKLEME (Hata Kontrollü) ---
 @st.cache_resource
 def load_model(path):
     try:
         model = YOLO(path)
-        model.model.names = {0: "Catlak", 1: "Cukur", 2: "Kasis"}
+        # Sınıf isimlerini kontrol et, yoksa ata
+        if not model.model.names:
+             model.model.names = {0: "Catlak", 1: "Cukur", 2: "Kasis"}
         return model
     except Exception as e:
-        st.error(f"Model yüklenemedi! '{path}' dosyası klasörde bulunamadı.")
         return None
 
 model = load_model(model_path)
 
-# --- SESSION STATE (DURUM KONTROLÜ) ---
+if model is None:
+    st.error(f"⚠️ HATA: **{model_path}** dosyası yüklenemedi!")
+    st.warning("Eğer bu 'Güçlü' model ise, dosya boyutu GitHub limitini (100MB) aşmış olabilir veya dosya 'requirements.txt' içinde eksik bir kütüphaneye ihtiyaç duyuyor olabilir.")
+    st.stop() # Uygulamayı durdur
+
+# --- SESSION STATE ---
 if 'is_running' not in st.session_state:
     st.session_state['is_running'] = False
 
@@ -88,79 +92,80 @@ if uploaded_file and model:
     tfile.write(uploaded_file.read())
     cap = cv2.VideoCapture(tfile.name)
     
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    # Orijinal Video Bilgileri
+    orig_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    orig_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = int(cap.get(cv2.CAP_PROP_FPS))
     
-    # Butonlar için kolonlar
-    col1, col2 = st.columns([1, 1])
-    
-    # BAŞLAT BUTONU
-    start_button = col1.button("▶️ Analizi Başlat", type="primary")
-    
-    # ÇIKIŞ BUTONU (Placeholder)
-    stop_placeholder = col2.empty()
+    # --- OPTİMİZASYON: RAM İÇİN BOYUT DÜŞÜRME ---
+    # Cloud ortamında 4K veya 1080p işlemek RAM'i patlatır.
+    # Görüntüleme ve işleme için genişliği maks 640px'e sabitliyoruz.
+    process_width = 640
+    aspect_ratio = orig_height / orig_width
+    process_height = int(process_width * aspect_ratio)
 
-    # Görüntü Alanı
+    col1, col2 = st.columns([1, 1])
+    start_button = col1.button("▶️ Analizi Başlat", type="primary")
+    stop_placeholder = col2.empty()
     st_frame = st.empty()
 
-    # Başlat'a basıldıysa durumu güncelle
     if start_button:
         st.session_state['is_running'] = True
 
-    # Eğer analiz çalışıyorsa
     if st.session_state['is_running']:
-        # Çıkış butonunu aktif et
         if stop_placeholder.button("❌ Videoyu Kapat / Sıfırla", type="secondary"):
             st.session_state['is_running'] = False
             cap.release()
-            st.rerun()  # Sayfayı yenileyerek başa döner
+            st.rerun()
 
-        # Video Kaydı için hazırlık
+        # Çıktı videosu da optimize edilmiş boyutta olacak
         output_temp = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
         fourcc = cv2.VideoWriter_fourcc(*'mp4v') 
-        out = cv2.VideoWriter(output_temp.name, fourcc, fps, (width, height))
+        out = cv2.VideoWriter(output_temp.name, fourcc, fps, (process_width, process_height))
         
         frame_count = 0
         last_result = None
 
-        while cap.isOpened():
-            # Kullanıcı "Videoyu Kapat" derse döngüyü kırmak için kontrol gerekebilir
-            # Ancak Streamlit yapısında yukarıdaki buton kontrolü döngüden hemen önce olduğu için
-            # döngü içindeyken butona basıldığında script baştan çalışır ve is_running False olur.
-            
-            ret, frame = cap.read()
-            if not ret:
-                break
-            
-            frame_count += 1
-            
-            # Skip Frame ve Tahmin
-            if frame_count % skip_frames == 0 or last_result is None:
-                results = model(frame, conf=confidence, verbose=False)
-                last_result = results[0]
-            
-            # Çizim
-            if last_result:
-                annotated_frame = last_result.plot(img=frame)
-            else:
-                annotated_frame = frame
+        try:
+            while cap.isOpened():
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                frame_count += 1
+                
+                # --- MEMORY SAFE: RESIZE ---
+                # Büyük videoyu küçült
+                frame_resized = cv2.resize(frame, (process_width, process_height))
 
-            out.write(annotated_frame)
-            
-            # Görüntüyü ekrana bas
-            frame_rgb = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
-            st_frame.image(frame_rgb, channels="RGB") 
+                if frame_count % skip_frames == 0 or last_result is None:
+                    # Tahmin işlemini küçültülmüş kare üzerinde yap
+                    results = model(frame_resized, conf=confidence, verbose=False)
+                    last_result = results[0]
+                    # Belleği rahatlat
+                    gc.collect()
+                
+                if last_result:
+                    annotated_frame = last_result.plot(img=frame_resized)
+                else:
+                    annotated_frame = frame_resized
+
+                out.write(annotated_frame)
+                
+                frame_rgb = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
+                st_frame.image(frame_rgb, channels="RGB") 
+
+        except Exception as e:
+            st.error(f"Bir hata oluştu: {e}")
         
-        # Döngü bittiğinde (Video sonu)
-        cap.release()
-        out.release()
+        finally:
+            cap.release()
+            out.release()
+            gc.collect() # Çıkışta temizlik
         
         st.success("Analiz Tamamlandı!")
         
-        # İndirme Butonu
         with open(output_temp.name, 'rb') as f:
             st.download_button('📥 İşlenmiş Videoyu İndir', f, file_name='SilverRoad_Output.mp4')
             
-        # İşlem bitince is_running'i kapatabiliriz ki tekrar başlamasın
         st.session_state['is_running'] = False
