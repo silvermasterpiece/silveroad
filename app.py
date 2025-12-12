@@ -5,24 +5,26 @@ import tempfile
 import os
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="SilverRoad AI", layout="wide")
+st.set_page_config(page_title="SilverRoad Bozuk Yol Tespiti", layout="centered")
 
-# --- CSS İLE GÖRÜNTÜYÜ ORTALAMA VE SIĞDIRMA ---
+# --- CSS İLE GÖRÜNTÜ VE BUTON DÜZENLEMELERİ ---
 st.markdown(
     """
     <style>
-    /* 1. Görüntünün kendisi için kurallar */
+    /* Görüntü ayarları */
     div[data-testid="stMainBlock"] img {
-        max-height: 70vh !important;  /* Yükseklik sınırı */
-        object-fit: contain !important; /* Görüntüyü bozma */
-        width: auto !important; /* Genişlik serbest */
+        max-height: 70vh !important;
+        object-fit: contain !important;
+        width: auto !important;
     }
-
-    /* 2. Görüntüyü tutan kapsayıcıyı (container) ortala */
     div[data-testid="stImage"] {
         display: flex !important;
-        justify-content: center !important; /* Yatayda ortala */
-        width: 100% !important; /* Kapsayıcı tam genişlikte olsun */
+        justify-content: center !important;
+        width: 100% !important;
+    }
+    /* Butonları biraz daha belirgin yapalım */
+    div.stButton > button {
+        width: 100%;
     }
     </style>
     """,
@@ -53,11 +55,11 @@ secilen_model_ismi = st.sidebar.selectbox(
 model_path = model_secenekleri[secilen_model_ismi]
 
 # --- DİĞER AYARLAR ---
-confidence = st.sidebar.slider("Güven Eşiği", 0.0, 1.0, 0.25)
-skip_frames = st.sidebar.slider("Hız (Skip Frame)", 1, 30, 10)
+confidence = st.sidebar.slider("Güven Eşiği (Confidence) ", 0.0, 1.0, 0.25)
+skip_frames = st.sidebar.slider("Hız (Skip Frame)", 1, 30, 5)
 
 # --- BAŞLIK ---
-st.title("🛣️ SilverRoad AI")
+st.title("🛣️ SilverRoad Bozuk Yol Tespiti")
 st.caption(f"Aktif Model: **{secilen_model_ismi}**")
 
 # --- MODEL YÜKLEME ---
@@ -73,10 +75,15 @@ def load_model(path):
 
 model = load_model(model_path)
 
+# --- SESSION STATE (DURUM KONTROLÜ) ---
+if 'is_running' not in st.session_state:
+    st.session_state['is_running'] = False
+
 # --- DOSYA YÜKLEME ---
 uploaded_file = st.file_uploader("Video Yükle", type=['mp4', 'avi', 'mov'])
 
 if uploaded_file and model:
+    # Geçici dosya oluşturma
     tfile = tempfile.NamedTemporaryFile(delete=False)
     tfile.write(uploaded_file.read())
     cap = cv2.VideoCapture(tfile.name)
@@ -85,18 +92,31 @@ if uploaded_file and model:
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = int(cap.get(cv2.CAP_PROP_FPS))
     
+    # Butonlar için kolonlar
+    col1, col2 = st.columns([1, 1])
+    
+    # BAŞLAT BUTONU
+    start_button = col1.button("▶️ Analizi Başlat", type="primary")
+    
+    # ÇIKIŞ BUTONU (Placeholder)
+    stop_placeholder = col2.empty()
+
     # Görüntü Alanı
     st_frame = st.empty()
-    
-    # Kontrol Butonları
-    btn_col1, btn_col2 = st.columns([1, 10])
-    start_button = btn_col1.button("Başlat")
-    stop_placeholder = btn_col2.empty()
 
+    # Başlat'a basıldıysa durumu güncelle
     if start_button:
-        st.session_state['stop'] = False
-        stop_button = stop_placeholder.button("Durdur")
-        
+        st.session_state['is_running'] = True
+
+    # Eğer analiz çalışıyorsa
+    if st.session_state['is_running']:
+        # Çıkış butonunu aktif et
+        if stop_placeholder.button("❌ Videoyu Kapat / Sıfırla", type="secondary"):
+            st.session_state['is_running'] = False
+            cap.release()
+            st.rerun()  # Sayfayı yenileyerek başa döner
+
+        # Video Kaydı için hazırlık
         output_temp = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
         fourcc = cv2.VideoWriter_fourcc(*'mp4v') 
         out = cv2.VideoWriter(output_temp.name, fourcc, fps, (width, height))
@@ -105,15 +125,13 @@ if uploaded_file and model:
         last_result = None
 
         while cap.isOpened():
-            if st.session_state.get('stop'):
-                break
-
-            if stop_placeholder.button("Durdur", key=f"stop_{frame_count}"):
-                 st.session_state['stop'] = True
-                 break
-
+            # Kullanıcı "Videoyu Kapat" derse döngüyü kırmak için kontrol gerekebilir
+            # Ancak Streamlit yapısında yukarıdaki buton kontrolü döngüden hemen önce olduğu için
+            # döngü içindeyken butona basıldığında script baştan çalışır ve is_running False olur.
+            
             ret, frame = cap.read()
-            if not ret: break
+            if not ret:
+                break
             
             frame_count += 1
             
@@ -122,7 +140,7 @@ if uploaded_file and model:
                 results = model(frame, conf=confidence, verbose=False)
                 last_result = results[0]
             
-            # Çizim (Sadece kutuları çiziyoruz, sayaç hesaplamıyoruz)
+            # Çizim
             if last_result:
                 annotated_frame = last_result.plot(img=frame)
             else:
@@ -130,18 +148,19 @@ if uploaded_file and model:
 
             out.write(annotated_frame)
             
+            # Görüntüyü ekrana bas
             frame_rgb = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
             st_frame.image(frame_rgb, channels="RGB") 
-
+        
+        # Döngü bittiğinde (Video sonu)
         cap.release()
         out.release()
-        stop_placeholder.empty()
-
-        if st.session_state.get('stop'):
-            st.warning("Durduruldu.")
-        else:
-            st.success("İşlem Bitti!")
         
+        st.success("Analiz Tamamlandı!")
+        
+        # İndirme Butonu
         with open(output_temp.name, 'rb') as f:
-            st.download_button('İndir', f, file_name='SilverRoad_Output.mp4')
-
+            st.download_button('📥 İşlenmiş Videoyu İndir', f, file_name='SilverRoad_Output.mp4')
+            
+        # İşlem bitince is_running'i kapatabiliriz ki tekrar başlamasın
+        st.session_state['is_running'] = False
