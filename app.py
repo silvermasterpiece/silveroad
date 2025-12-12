@@ -19,7 +19,6 @@ st.markdown(
     }
 
     /* 2. Görüntüyü tutan kapsayıcıyı (container) ortala */
-    /* Bu kural videonun sol kenara yapışmasını engeller */
     div[data-testid="stImage"] {
         display: flex !important;
         justify-content: center !important; /* Yatayda ortala */
@@ -31,15 +30,35 @@ st.markdown(
 )
 
 # --- SIDEBAR ---
-st.sidebar.image("silveroad.png", use_container_width=True)
+try:
+    st.sidebar.image("silveroad.png", use_container_width=True)
+except:
+    st.sidebar.write("SilverRoad AI Logo")
 
 st.sidebar.header("Ayarlar")
+
+# --- MODEL SEÇİMİ ---
+model_secenekleri = {
+    "YOLO12n (Hızlı)": "bestn.pt",
+    "YOLO12s (Dengeli)": "bests.pt",
+    "YOLO12m (Güçlü)": "bestm.pt"
+}
+
+secilen_model_ismi = st.sidebar.selectbox(
+    "Model Seçimi",
+    options=list(model_secenekleri.keys()),
+    index=1 
+)
+
+model_path = model_secenekleri[secilen_model_ismi]
+
+# --- DİĞER AYARLAR ---
 confidence = st.sidebar.slider("Güven Eşiği", 0.0, 1.0, 0.40)
 skip_frames = st.sidebar.slider("Hız (Skip Frame)", 1, 30, 10)
-model_path = 'bests.pt'
 
 # --- BAŞLIK ---
 st.title("🛣️ SilverRoad AI")
+st.caption(f"Aktif Model: **{secilen_model_ismi}**")
 
 # --- MODEL YÜKLEME ---
 @st.cache_resource
@@ -49,16 +68,10 @@ def load_model(path):
         model.model.names = {0: "Catlak", 1: "Cukur", 2: "Kasis"}
         return model
     except Exception as e:
-        st.error(f"Model yüklenemedi! '{path}' dosyası eksik.")
+        st.error(f"Model yüklenemedi! '{path}' dosyası klasörde bulunamadı.")
         return None
 
 model = load_model(model_path)
-
-# --- İSTATİSTİK BAR ---
-col1, col2, col3 = st.columns(3)
-k1 = col1.metric("Çatlak", 0)
-k2 = col2.metric("Çukur", 0)
-k3 = col3.metric("Kasis", 0)
 
 # --- DOSYA YÜKLEME ---
 uploaded_file = st.file_uploader("Video Yükle", type=['mp4', 'avi', 'mov'])
@@ -92,32 +105,32 @@ if uploaded_file and model:
         last_result = None
 
         while cap.isOpened():
-            if stop_button:
-                st.session_state['stop'] = True
+            if st.session_state.get('stop'):
                 break
+
+            if stop_placeholder.button("Durdur", key=f"stop_{frame_count}"):
+                 st.session_state['stop'] = True
+                 break
 
             ret, frame = cap.read()
             if not ret: break
             
             frame_count += 1
             
+            # Skip Frame ve Tahmin
             if frame_count % skip_frames == 0 or last_result is None:
                 results = model(frame, conf=confidence, verbose=False)
                 last_result = results[0]
             
+            # Çizim (Sadece kutuları çiziyoruz, sayaç hesaplamıyoruz)
             if last_result:
                 annotated_frame = last_result.plot(img=frame)
-                cls_list = last_result.boxes.cls.cpu().numpy()
-                k1.metric("Çatlak", int((cls_list == 0).sum()))
-                k2.metric("Çukur", int((cls_list == 1).sum()))
-                k3.metric("Kasis", int((cls_list == 2).sum()))
             else:
                 annotated_frame = frame
 
             out.write(annotated_frame)
             
             frame_rgb = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
-            # Görüntüyü göster (CSS ortalayacak)
             st_frame.image(frame_rgb, channels="RGB") 
 
         cap.release()
