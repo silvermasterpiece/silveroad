@@ -53,7 +53,7 @@ secilen_model_ismi = st.sidebar.selectbox(
 model_path = model_secenekleri[secilen_model_ismi]
 
 # --- DİĞER AYARLAR ---
-confidence = st.sidebar.slider("Güven Eşiği", 0.0, 1.0, 0.40)
+confidence = st.sidebar.slider("Güven Eşiği", 0.0, 1.0, 0.25)
 skip_frames = st.sidebar.slider("Hız (Skip Frame)", 1, 30, 10)
 
 # --- BAŞLIK ---
@@ -144,3 +144,4 @@ if uploaded_file and model:
         
         with open(output_temp.name, 'rb') as f:
             st.download_button('İndir', f, file_name='SilverRoad_Output.mp4')
+
