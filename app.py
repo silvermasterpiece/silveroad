@@ -1,120 +1,171 @@
 import streamlit as st
+from ultralytics import YOLO
 import cv2
 import tempfile
-import gc
-import time # ZAMANLAYICI EKLENDİ
-from ultralytics import YOLO
-import os
+import gc  # Garbage Collector (Bellek temizliği)
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="SilverRoad AI", layout="centered")
+st.set_page_config(page_title="SilverRoad Bozuk Yol Tespiti", layout="centered")
 
-# --- CSS (Görüntü Ortalama) ---
+# --- CSS ---
 st.markdown(
     """
     <style>
-    div[data-testid="stImage"] {
-        display: flex;
-        justify-content: center;
+    div[data-testid="stMainBlock"] img {
+        max-height: 70vh !important;
+        object-fit: contain !important;
+        width: auto !important;
     }
-    div[data-testid="stImage"] img {
-        max-height: 400px; /* Yükseklik sınırı koyduk ki tarayıcı yorulmasın */
-        width: auto;
+    div[data-testid="stImage"] {
+        display: flex !important;
+        justify-content: center !important;
+        width: 100% !important;
+    }
+    div.stButton > button {
+        width: 100%;
     }
     </style>
     """,
     unsafe_allow_html=True
 )
 
-st.title("🛣️ SilverRoad Bozuk Yol Tespiti")
+# --- SIDEBAR ---
+try:
+    st.sidebar.image("silveroad.png", use_container_width=True)
+except:
+    st.sidebar.write("SilverRoad AI Logo")
 
-# --- MODEL YÜKLEME ---
+st.sidebar.header("Ayarlar")
+
+# --- MODEL SEÇİMİ ---
+model_secenekleri = {
+    "YOLO12n (Hızlı)": "bestn.pt",
+    "YOLO12s (Dengeli)": "bests.pt",
+    "YOLO12m (Güçlü)": "bestm.pt"
+}
+
+secilen_model_ismi = st.sidebar.selectbox(
+    "Model Seçimi",
+    options=list(model_secenekleri.keys()),
+    index=1 
+)
+
+model_path = model_secenekleri[secilen_model_ismi]
+
+# --- DİĞER AYARLAR ---
+confidence = st.sidebar.slider("Güven Eşiği (Confidence) ", 0.0, 1.0, 0.25)
+skip_frames = st.sidebar.slider("Hız (Skip Frame)", 1, 30, 5)
+
+# --- BAŞLIK ---
+st.title("🛣️ SilverRoad Bozuk Yol Tespiti")
+st.caption(f"Aktif Model: **{secilen_model_ismi}**")
+
+# --- MODEL YÜKLEME (Hata Kontrollü) ---
 @st.cache_resource
-def load_model():
-    # Hata almamak için manuel path yerine doğrudan dosya adını dene
-    # Eğer github'da dosya 'bestn.pt' ise:
+def load_model(path):
     try:
-        model = YOLO("bestn.pt") 
+        model = YOLO(path)
+        # Sınıf isimlerini kontrol et, yoksa ata
+        if not model.model.names:
+             model.model.names = {0: "Catlak", 1: "Cukur", 2: "Kasis"}
         return model
     except Exception as e:
         return None
 
-model = load_model()
+model = load_model(model_path)
 
-if not model:
-    st.warning("⚠️ Model dosyası (bestn.pt) yüklenemedi. Lütfen dosyanın GitHub'da olduğundan emin olun.")
-    st.stop()
+if model is None:
+    st.error(f"⚠️ HATA: **{model_path}** dosyası yüklenemedi!")
+    st.warning("Eğer bu 'Güçlü' model ise, dosya boyutu GitHub limitini (100MB) aşmış olabilir veya dosya 'requirements.txt' içinde eksik bir kütüphaneye ihtiyaç duyuyor olabilir.")
+    st.stop() # Uygulamayı durdur
 
-# --- VİDEO YÜKLEME ---
+# --- SESSION STATE ---
+if 'is_running' not in st.session_state:
+    st.session_state['is_running'] = False
+
+# --- DOSYA YÜKLEME ---
 uploaded_file = st.file_uploader("Video Yükle", type=['mp4', 'avi', 'mov'])
 
-if uploaded_file:
-    # Geçici dosya işlemleri
+if uploaded_file and model:
+    # Geçici dosya oluşturma
     tfile = tempfile.NamedTemporaryFile(delete=False)
     tfile.write(uploaded_file.read())
     cap = cv2.VideoCapture(tfile.name)
     
-    # Video bilgileri
+    # Orijinal Video Bilgileri
+    orig_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    orig_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = int(cap.get(cv2.CAP_PROP_FPS))
-    if fps == 0: fps = 30 # Hata önleyici
     
-    # Butonlar
-    col1, col2 = st.columns(2)
-    start_btn = col1.button("▶️ Başlat", type="primary")
-    stop_btn = col2.button("⏹️ Durdur")
-    
+    # --- OPTİMİZASYON: RAM İÇİN BOYUT DÜŞÜRME ---
+    # Cloud ortamında 4K veya 1080p işlemek RAM'i patlatır.
+    # Görüntüleme ve işleme için genişliği maks 640px'e sabitliyoruz.
+    process_width = 640
+    aspect_ratio = orig_height / orig_width
+    process_height = int(process_width * aspect_ratio)
+
+    col1, col2 = st.columns([1, 1])
+    start_button = col1.button("▶️ Analizi Başlat", type="primary")
+    stop_placeholder = col2.empty()
     st_frame = st.empty()
-    
-    if start_btn:
-        # --- OPTİMİZASYON AYARLARI ---
-        process_width = 480  # Çözünürlüğü düşük tutuyoruz (Hız için)
-        skip_frames = 5      # Tahmin atlama (Model her karede çalışmasın)
-        display_every = 3    # Ekran yenileme (Tarayıcı her karede yenilenmesin - KRİTİK AYAR)
+
+    if start_button:
+        st.session_state['is_running'] = True
+
+    if st.session_state['is_running']:
+        if stop_placeholder.button("❌ Videoyu Kapat / Sıfırla", type="secondary"):
+            st.session_state['is_running'] = False
+            cap.release()
+            st.rerun()
+
+        # Çıktı videosu da optimize edilmiş boyutta olacak
+        output_temp = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v') 
+        out = cv2.VideoWriter(output_temp.name, fourcc, fps, (process_width, process_height))
         
         frame_count = 0
         last_result = None
-        
-        while cap.isOpened():
-            # Stop butonuna basılırsa döngüyü kır
-            # Not: Streamlit'te döngü içindeyken butonu algılamak zordur, 
-            # ancak tarayıcı yenilenirse durur.
-            
-            ret, frame = cap.read()
-            if not ret:
-                break
+
+        try:
+            while cap.isOpened():
+                ret, frame = cap.read()
+                if not ret:
+                    break
                 
-            frame_count += 1
-            
-            # 1. Boyutlandırma (RAM Tasarrufu)
-            h, w = frame.shape[:2]
-            aspect = h / w
-            new_h = int(process_width * aspect)
-            frame_resized = cv2.resize(frame, (process_width, new_h))
-            
-            # 2. Model Tahmini (Her 5 karede bir)
-            if frame_count % skip_frames == 0 or last_result is None:
-                results = model(frame_resized, verbose=False, conf=0.25)
-                last_result = results[0]
-            
-            # 3. Çizim
-            if last_result:
-                annotated_frame = last_result.plot()
-            else:
-                annotated_frame = frame_resized
+                frame_count += 1
                 
-            # 4. Ekrana Basma (Log Hatasını Önleyen Kısım)
-            # Her kareyi değil, sadece her 3. kareyi ekrana basıyoruz.
-            if frame_count % display_every == 0:
-                # BGR -> RGB Dönüşümü
+                # --- MEMORY SAFE: RESIZE ---
+                # Büyük videoyu küçült
+                frame_resized = cv2.resize(frame, (process_width, process_height))
+
+                if frame_count % skip_frames == 0 or last_result is None:
+                    # Tahmin işlemini küçültülmüş kare üzerinde yap
+                    results = model(frame_resized, conf=confidence, verbose=False)
+                    last_result = results[0]
+                    # Belleği rahatlat
+                    gc.collect()
+                
+                if last_result:
+                    annotated_frame = last_result.plot(img=frame_resized)
+                else:
+                    annotated_frame = frame_resized
+
+                out.write(annotated_frame)
+                
                 frame_rgb = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
-                st_frame.image(frame_rgb, use_container_width=True) # use_column_width yerine bu yeni komut
-                
-                # MİNİK BEKLEME: Tarayıcının resmi indirmesine fırsat ver
-                time.sleep(0.01) 
-            
-            # 5. RAM Temizliği (Nadir yap)
-            if frame_count % 100 == 0:
-                gc.collect()
+                st_frame.image(frame_rgb, channels="RGB") 
+
+        except Exception as e:
+            st.error(f"Bir hata oluştu: {e}")
         
-        cap.release()
-        st.success("Video tamamlandı.")
+        finally:
+            cap.release()
+            out.release()
+            gc.collect() # Çıkışta temizlik
+        
+        st.success("Analiz Tamamlandı!")
+        
+        with open(output_temp.name, 'rb') as f:
+            st.download_button('📥 İşlenmiş Videoyu İndir', f, file_name='SilverRoad_Output.mp4')
+            
+        st.session_state['is_running'] = False
