@@ -1,5 +1,3 @@
-# silveroad
-Yol Hasar Tespiti
 graph TD
     %% Genel Stil Tanımları
     classDef user fill:#f9f,stroke:#333,stroke-width:2px,color:black;
