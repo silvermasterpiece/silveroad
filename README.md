@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="silveroad.jpg" alt="silveRoAd Logo" width="300" />
+  <img src="silveroad.png" alt="silveRoAd Logo" width="300" />
 
   <h1>silveRoAd</h1>
 
