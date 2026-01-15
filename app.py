@@ -2,8 +2,8 @@ import streamlit as st
 from ultralytics import YOLO
 import cv2
 import tempfile
-import gc  # RAM temizliği
-import time # Tarayıcı senkronizasyonu için
+import gc  
+import time 
 import os
 
 # --- SAYFA AYARLARI ---
@@ -46,7 +46,6 @@ model_secenekleri = {
     "YOLO12m (Güçlü)": "bestm.pt"
 }
 
-# Varsayılanı 'Hızlı' yapıyorum ki Cloud çökmesin, istersen değiştirebilirsin.
 secilen_model_ismi = st.sidebar.selectbox(
     "Model Seçimi",
     options=list(model_secenekleri.keys()),
@@ -97,10 +96,8 @@ if uploaded_file and model:
     orig_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     orig_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = int(cap.get(cv2.CAP_PROP_FPS))
-    if fps == 0: fps = 24 # Hata önleyici
+    if fps == 0: fps = 24 
     
-    # --- KRİTİK OPTİMİZASYON: RAM İÇİN BOYUT DÜŞÜRME ---
-    # Cloud RAM limiti 1GB olduğu için videoyu küçültüp işliyoruz.
     process_width = 480 
     aspect_ratio = orig_height / orig_width
     process_height = int(process_width * aspect_ratio)
@@ -127,9 +124,6 @@ if uploaded_file and model:
         frame_count = 0
         last_result = None
         
-        # LOGLARI DÜZELTEN AYAR: 
-        # Tarayıcıya her kareyi yollarsak "Missing File" hatası alırız. 
-        # Sadece her 3 karede bir görüntüyü güncelle.
         display_every = 3
 
         try:
@@ -140,34 +134,24 @@ if uploaded_file and model:
                 
                 frame_count += 1
                 
-                # 1. Resize (RAM Tasarrufu)
                 frame_resized = cv2.resize(frame, (process_width, process_height))
 
-                # 2. Model Tahmini
                 if frame_count % skip_frames == 0 or last_result is None:
                     results = model(frame_resized, conf=confidence, verbose=False)
                     last_result = results[0]
                 
-                # 3. Çizim
                 if last_result:
                     annotated_frame = last_result.plot(img=frame_resized)
                 else:
                     annotated_frame = frame_resized
 
-                # 4. Kayıt (Her kare kaydedilir, atlama yapılmaz)
                 out.write(annotated_frame)
                 
-                # 5. Ekrana Basma (Sadece belirli aralıklarla)
                 if frame_count % display_every == 0:
                     frame_rgb = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
                     st_frame.image(frame_rgb, channels="RGB")
-                    
-                    # 🛑 BU SATIR HAYAT KURTARIR:
-                    # Tarayıcının resmi indirmesi için Python'u milisaniye durduruyoruz.
-                    # Bu sayede "Missing File" hatası %99 çözülür.
                     time.sleep(0.01)
 
-                # 6. RAM Temizliği (Her 100 karede bir)
                 if frame_count % 100 == 0:
                     gc.collect()
 
@@ -186,3 +170,4 @@ if uploaded_file and model:
                 st.download_button('📥 İşlenmiş Videoyu İndir', f, file_name='SilverRoad_Output.mp4')
             
         st.session_state['is_running'] = False
+
