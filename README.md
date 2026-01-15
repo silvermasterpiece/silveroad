@@ -35,7 +35,6 @@
 * **High Accuracy:** Trained on a custom dataset using the state-of-the-art **YOLOv12** architecture.
 * **Interactive Dashboard:** User-friendly web interface built with **Streamlit** for easy visualization.
 * **Defect Classification:** Capable of distinguishing between various types of road damage (e.g., Pothole, Crack, Rutting).
-* **Location Mapping:** (Optional) Logs the GPS coordinates of detected defects for maintenance planning.
 
 ## 🛠️ Tech Stack
 
